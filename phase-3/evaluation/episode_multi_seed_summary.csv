@@ -1,0 +1,10 @@
+system,metric,mean,median,std,min,max
+"Current (day-level, Phase 2)",event_recall,0.812,0.769,0.082,0.731,0.923
+"Current (day-level, Phase 2)",event_precision,0.564,0.56,0.047,0.483,0.635
+"Current (day-level, Phase 2)",event_f1,0.663,0.66,0.043,0.604,0.724
+"Current (day-level, Phase 2)",avg_latency_days,9.146,11.5,3.932,2.74,12.57
+Episode (Phase 3),event_recall,0.812,0.769,0.082,0.731,0.923
+Episode (Phase 3),event_precision,0.464,0.472,0.04,0.412,0.523
+Episode (Phase 3),event_f1,0.589,0.582,0.047,0.527,0.668
+Episode (Phase 3),avg_latency_days,9.146,11.5,3.932,2.74,12.57
+Episode (Phase 3),duplicate_episode_rate,0.255,0.261,0.082,0.105,0.4

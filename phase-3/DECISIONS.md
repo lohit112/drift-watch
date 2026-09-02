@@ -1,0 +1,31 @@
+# Decisions Log
+
+### D1 — Track: AI Risk Manager, not AI Growth & Agentic Commerce
+The Growth/Agentic Commerce track is where Razorpay is investing most publicly (Claude+Zepto/Swiggy/Zomato checkout partnership), which means both the highest visibility and the highest existing-product overlap risk. AI Risk Manager is less crowded publicly and maps directly onto Razorpay's own internal engineering culture (Bumblebee), which we judged more likely to produce a genuine "let's talk about your architecture" reaction from a hiring panel than a flashier but thinner growth demo.
+
+### D2 — Concept: post-onboarding drift, not onboarding review
+Bumblebee already owns onboarding-time merchant risk review, extremely well, per Razorpay's own engineering blog. Building another onboarding-risk tool would read as a worse clone of something the judges ship internally. Post-onboarding continuous monitoring is explicitly *not* covered in any public Razorpay material we found — see research/PRODUCT_OVERLAP.md.
+
+### D3 — Merchant-specific baseline, not global thresholds
+A single global refund-rate or dispute-rate threshold treats a returns-heavy apparel merchant the same as a digital-goods merchant with near-zero returns. We use each merchant's own trailing history as the baseline, evaluated via z-scores against a rolling mean/std (EWMA-style), specifically because the original brief and our own competitive analysis flagged "single global threshold" as the #1 signal of an unsophisticated hackathon fraud project.
+
+### D4 — Deterministic statistics for detection, LLM reserved for reasoning
+Per the original design brief: numeric aggregation, thresholds, and time-series comparisons are handled by pandas/numpy, not an LLM. The LLM's job (currently a documented seam, not yet wired to a real API call — see PROJECT_STATE.md) is narrative generation and hypothesis framing over evidence the deterministic layer already computed and verified. This is a direct response to prompt-injection risk: a merchant can't talk their way out of a flag by writing something in a policy page, because the flag itself never touches the LLM.
+
+### D5 — Independent signal-domain grouping (fixing a real bug)
+Originally grouped `txn_count` and `txn_volume` as two separate signals toward the "≥2 correlated signals" flagging threshold. Since volume ≈ count × avg_value, these are not independent — this was double-counting one real signal and inflating false positives (see PROJECT_STATE.md bug log). Fixed by explicitly grouping features into independent signal domains (volume, refund, dispute, category_mix, geo_mix) before counting toward the correlation threshold. Kept in this log because the fix materially changed the evaluation numbers (false positive rate dropped from 2.08% to 0.71%) and that's exactly the kind of engineering judgment worth being able to describe in a panel interview.
+
+### D6 — No autonomous account action, ever
+Every recommended action in the case builder routes to a human approval gate. This was a hard requirement in the original brief and we treated it as non-negotiable rather than a nice-to-have, including in the demo script's audit log, which explicitly logs "Routed to human approval gate - no autonomous account action taken" on every case.
+
+### D7 — Synthetic data only, explicitly labeled
+No production Razorpay data is used or claimed. The generator (`data/synthetic_generator.py`) and every downstream artifact (README, PROJECT_SPEC, demo output) label the data as synthetic. This is both an ethical requirement from the original brief and a credibility issue — claiming access to real transaction data we don't have would be an easy, embarrassing thing for a Razorpay engineer to catch.
+
+### D8 — Episodes are a grouping/explanation layer, not a new detector (Phase 3)
+`episode/builder.py` groups the SAME `predicted_drift_ms` flags the Phase 1/2 detector already produces; it does not introduce a second, competing detection mechanism. This was a deliberate scope boundary: the brief's mission was "detects, groups, tracks, and explains" — the detection half was already built and audited in Phase 1/2, and building a second detector risked two systems disagreeing with each other for reasons nobody could explain. The tradeoff, measured honestly: episode grouping alone does NOT improve day-level precision/F1 (see evaluation/EPISODE_EVALUATION.md — it's mildly worse), because grouping doesn't remove false positives, it just bundles them differently. What it does fix, verified by tests/test_episode_invariants.py and tests/test_golden_episodes.py, is the confidence-trajectory flip-flop documented in PHASE_2_EPISODE_BASELINE.md.
+
+### D9 — GAP_TOLERANCE_DAYS=2, derived from data, not tuned to a metric
+Chosen by inspecting the actual gap distribution between flagged days in the existing scored dataset (see `episode/grouping.py`'s docstring): real fraud episodes never show an internal gap larger than 2 days, while genuinely separate occurrences (the seasonal merchants' annual spikes) are 70-90+ days apart. A gap tolerance of 5 was also tested (`evaluation/EPISODE_ABLATIONS.md` variant D) and made negligible difference, which is evidence the choice isn't a fragile, overfit constant.
+
+### D10 — An "established pattern" confidence discount was tried and reverted
+During Phase 3, a legitimate seasonal merchant (M0009) was found to still reach ESCALATE on its 2nd/3rd annual occurrence, even after historical evidence correctly recognized the pattern wasn't novel (see PHASE_3_REPORT.md "Legitimate Episodes"). A multiplicative confidence discount for merchants with an "established pattern" (3+ prior occurrences) was implemented, and immediately reverted after it broke real fraud detection on M0021 — a merchant with a long clean history can accumulate 3+ spurious historical z-threshold crossings on an unrelated feature purely by chance, and the discount couldn't tell "this specific behavior recurs" from "this merchant has some noisy feature somewhere in its past." Kept in this log specifically because reverting a change that looked like it should help, once it demonstrably broke something else, is exactly the kind of judgment call worth being able to describe and defend. The seasonal over-escalation remains a documented, unresolved limitation.

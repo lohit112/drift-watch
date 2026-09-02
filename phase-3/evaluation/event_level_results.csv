@@ -1,0 +1,3 @@
+events_total,events_detected,event_recall,avg_event_detection_latency_days,false_alert_rate_nonevent_days,detector
+4,3,0.75,3.67,0.0202,Static global threshold
+4,4,1.0,1.0,0.0071,Drift Watch (merchant-specific baseline)
