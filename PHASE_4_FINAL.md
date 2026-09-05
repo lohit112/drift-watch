@@ -150,5 +150,4 @@ unchanged.
 4. **Hypothesis model asymmetry** — only RISK_DRIFT's score has Phase 2 rigor;
    LEGITIMATE_GROWTH/SEASONAL_PATTERN are derived, not independently
    calibrated.
-5. **No persistent backend/FastAPI/frontend** — future work, unchanged from
-   PROJECT_STATE.md.
+5. **Phase 5 product layer was not yet present in the Phase 4 state.** Phase 5 subsequently added the FastAPI backend, SQLite persistence, and React/Vite Risk Ops frontend; see `PHASE_5_FINAL.md`. This report intentionally describes the Phase 4 completion state only.
