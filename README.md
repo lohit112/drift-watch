@@ -1,242 +1,74 @@
-# Drift Watch
+# Dynamic Engine Integration — Drop-In Instructions
 
-**Continuous post-onboarding merchant risk-drift detection and evidence-based investigation.**
+These files integrate the Dynamic Multi-Objective Context Aggregation Engine
+directly with the **real, original** `smart_aggregation_project_v2/main code/`
+codebase (the one in `dl_legit_final.zip`), targeting **Method A only**, as
+requested. Method B and Method C are untouched.
 
-Drift Watch is a fintech risk-engineering prototype that monitors already-approved merchants for behavioral change, groups related anomalies into risk episodes, investigates suspicious episodes with a bounded evidence-seeking agent, and produces an evidence-grounded recommendation for human review.
+## Files in this folder
 
-The project uses synthetic merchant data. It is an independent prototype: it does not use private Razorpay data or systems and does not claim production deployment.
+| File | Purpose |
+|---|---|
+| `meta_features.py` | Runtime meta-feature extraction (Q_c, H_R, D_R). Model-agnostic — no changes needed from the standalone version. |
+| `dynamic_controller.py` | Softmax-over-features dynamic parameter controller. Model-agnostic — no changes needed. |
+| `utility_optimizer.py` | Per-item value-density greedy knapsack selector (replaces fixed-lambda MMR). **Adapted**: imports `from models import Chunk` (the real project's dataclass) instead of the standalone reconstruction, and uses `chunk.tokens` instead of `chunk.token_count` to match the real field name. |
+| `dynamic_smart_aggregation.py` | **The actual integration.** `DynamicSmartAggregation` — a drop-in replacement class for `SmartAggregation` (`smart_aggregation.py`), same constructor signature, same `retrieve(query, verbose)` → `List[Chunk]` contract, same `get_statistics()`. Step 1 (multi-strategy retrieval) and Step 3 (cross-encoder reranking) call the exact same `self.embedder` / `self.vector_store` / `self.cross_encoder` methods, unchanged. Only Step 2's dedup threshold and Step 4's selection mechanism are dynamic. |
+| `run_method_a_comparison.py` | Standalone comparison script. Loads data and builds the index exactly like `demo_enhanced.py` does for Method A, then runs both `SmartAggregation` and `DynamicSmartAggregation` side by side and reports accuracy / tokens / latency / compression ratio. |
+| `_mock_backends.py` | **Test-only.** TF-IDF-based mock `Embedder`/`VectorStore`/`CrossEncoderReranker` matching the real classes' interfaces, used to verify this integration's wiring in this sandbox (no internet access to download `sentence-transformers` models here). **Not needed on your machine** — use the real `embeddings.py` classes there.
 
-## Why this problem
+## How to install
 
-A merchant can be legitimate at onboarding and become materially different months later because of account compromise, a business-model change, unusual refund/dispute behavior, geographic expansion, or seasonality. A single anomaly score does not explain which explanation is most plausible.
+1. Copy `meta_features.py`, `dynamic_controller.py`, `utility_optimizer.py`,
+   and `dynamic_smart_aggregation.py` into your `main code/` directory,
+   alongside `smart_aggregation.py`, `models.py`, `embeddings.py`, etc.
+2. Copy `run_method_a_comparison.py` into the project root (next to
+   `demo_enhanced.py`), or wherever you want to run it from — it inserts
+   `main code/` onto `sys.path` the same way `demo_enhanced.py` does, but
+   you may need to adjust the `sys.path.insert` line depending on where
+   you place it relative to `main code/`.
+3. Ignore `_mock_backends.py` — it's only for testing without internet
+   access. On your machine, the real `embeddings.py` (sentence-transformers
+   + FAISS) works as-is.
 
-Drift Watch separates the problem into detection, episode formation, evidence gathering, competing-hypothesis reasoning, case synthesis, and human review.
-
-## Architecture
-
-```text
-Merchant event stream
-        |
-        v
-Merchant-specific drift detection
-        |
-        v
-Risk episode grouping + state machine
-        |
-        v
-Bounded agentic investigation
-        +--> planner
-        +--> typed investigation tools
-        +--> evidence registry
-        +--> competing hypotheses
-        +--> sufficiency evaluation
-        |
-        v
-Grounded case synthesis
-        |
-        v
-Recommendation
-        |
-        v
-Human review
-        |
-        v
-Persisted audit trail
-```
-
-The Phase 5 product layer wraps this engine with FastAPI, SQLite, and a React/Vite Risk Ops dashboard. It calls the existing reasoning code rather than duplicating it.
-
-## What is implemented
-
-### Detection
-
-The detector compares merchant behavior with the merchant's own historical baseline and keeps correlated features in explicit signal groups such as volume, refund/dispute, category mix, and geography. Historical calculations are constrained to past observations to avoid temporal leakage.
-
-### Risk episodes
-
-Flagged observations are grouped into persistent episodes with temporal boundaries, confidence trajectory, evidence aggregation, and state transitions. This addresses the failure mode where one persistent incident oscillates between day-level decisions.
-
-### Agentic investigation
-
-Phase 4 adds a bounded investigation loop. The planner starts from the episode trigger, selects explicit tools, records evidence with stable IDs, evaluates competing hypotheses, and stops when evidence is sufficient or the investigation budget is exhausted.
-
-The hypothesis set is:
-
-- `RISK_DRIFT`
-- `LEGITIMATE_GROWTH`
-- `SEASONAL_PATTERN`
-- `INSUFFICIENT_EVIDENCE`
-
-A failed tool call cannot increase risk, and unexplored hypotheses are not treated as evidence against themselves.
-
-### Grounded synthesis
-
-Evidence items carry stable `EVID-xxx` IDs and provenance. Narrative claims are checked against the registry; unsupported evidence references are rejected. Recommendation logic remains deterministic and outside free-form model generation.
-
-### Human approval
-
-`ESCALATE` is a recommendation for human review. The system does not expose an account-suspension or other executable merchant-action endpoint. Review actions are persisted and audited.
-
-## Phase 5 product
-
-The final product adds:
-
-- FastAPI backend
-- SQLite persistence
-- React + Vite Risk Ops dashboard
-- merchant and episode views
-- investigation activity
-- evidence and hypothesis views
-- human review actions
-- persisted audit trail
-- pluggable LLM adapter with deterministic fallback
-
-The default configuration is deterministic and does not require external API access.
-
-## Evaluation
-
-The repository contains event-level, multi-seed, episode-level, baseline, ablation, golden-case, failure-path, API, persistence, and LLM-adapter tests.
-
-The current full automated suite is **102 passing tests**.
-
-The benchmarks are intentionally reported with their tradeoffs. Drift Watch does not universally beat the static comparator: on the richer benchmark, it improves recall/false-alert behavior but has lower precision/F1 and slower average detection latency. Episode grouping also does not improve raw precision/F1. These results are preserved rather than optimized away.
-
-## Development workflow
-
-The project was developed iteratively against a real local repository. Python and pytest were used for the detection, episode, agent, API, persistence, and failure-path checks; the React/Vite frontend was built separately and then exercised through the FastAPI application. Claude Code and ZCode were used as coding-agent environments during implementation, but changes were kept reviewable in the repository and validated with deterministic tests and local runs.
-
-The useful engineering record is the code, tests, evaluation artifacts, Git commits, decisions, and documented reversals—not an assumption that the first implementation was correct.
-
-## Development evolution
-
-```text
-Phase 1  -> correctness audit + leakage prevention
-Phase 2  -> structured evidence + confidence + evaluation
-Phase 3  -> stateful risk episodes
-Phase 4  -> bounded agentic investigation
-Phase 5  -> backend + persistence + Risk Ops UI
-```
-
-The repository intentionally keeps the engineering record visible. Important failures and fixes are summarized in `CHANGELOG.md` and `DECISIONS.md`; the phase reports retain deeper evidence and historical measurements.
-
-### What went wrong, and what changed
-
-Examples from the actual build:
-
-- The comparison baseline had temporal leakage. It was replaced with a history-only computation and the changed benchmark numbers were kept.
-- The first demo could attach evidence from the wrong drift day. The event/evidence alignment was fixed and regression-tested.
-- The original confidence formula was arbitrary. Phase 2 replaced it with a documented multi-component score.
-- Persistent episodes could oscillate between decisions. Phase 3 introduced episode-level aggregation and stateful resolution.
-- A seasonal merchant exposed an over-escalation edge case. An apparently useful confidence discount broke a real fraud scenario, so it was reverted and the limitation was documented.
-- The Phase 4 agent initially double-counted historical evidence and could mistake unexplored hypotheses for negative evidence. Both issues were fixed with regression coverage.
-
-## Security and safety
-
-The system treats merchant-derived text as untrusted, constrains tool execution, validates model output before use, rejects unsupported evidence citations, bounds investigation iterations/tool calls, and requires an explicit human decision for escalation review.
-
-The LLM adapter is pluggable and tested against fake transports. **No live provider call was made during development**, so the default implementation is deterministic and no live-LLM integration claim is made.
-
-## Repository structure
-
-```text
-agent/          bounded agentic investigation
-agents/          investigators, evidence, confidence, case building
-detection/      statistical drift detection
-episode/        risk episode grouping and state machine
-evaluation/     benchmarks, ablations, and evaluation harnesses
-backend/        FastAPI API, persistence, model adapter
-frontend/       React/Vite Risk Ops dashboard
-data/           synthetic data and generator
-docs/           technical design documentation
-research/       product and competitive research
-scripts/        runnable utilities
-tests/           regression and integration tests
-```
-
-## Quick start
-
-### Requirements
-
-- Python 3.11+
-- Node.js 18+
-
-### Backend
+## How to run
 
 ```bash
-pip install -r requirements.txt
-uvicorn backend.main:app --host 127.0.0.1 --port 8000
+# Sample data, default settings (token_budget=3582, variable cardinality)
+python run_method_a_comparison.py
+
+# Real FinanceBench, same docs/questions count as the original paper run
+python run_method_a_comparison.py --financebench /path/to/financebench \
+    --max-docs 45 --max-questions 75
+
+# Fixed-cardinality ablation: cap dynamic engine at k=10 to isolate the
+# effect of dynamic WEIGHTS alone, independent of budget-driven flexibility
+# (this is "Condition C" from the Task 3 ablation grid)
+python run_method_a_comparison.py --financebench /path/to/financebench \
+    --max-docs 45 --max-questions 75 --max-items 10
+
+# Isolate dynamic dedup from dynamic selection (Condition B vs Condition E)
+python run_method_a_comparison.py --financebench /path/to/financebench \
+    --static-dedup --max-items 10
 ```
 
-Open `http://127.0.0.1:8000` for the dashboard and `http://127.0.0.1:8000/docs` for the API.
+Results are saved to `method_a_vs_dynamic_results.json` (configurable via
+`--output`), with the same shape as the project's existing
+`experiment_results_financebench_*.json` files, plus an additional
+`dynamic_diagnostics` field per query (meta-features, dynamic parameters,
+optimizer diagnostics) for deeper analysis.
 
-### Frontend development
+## What changed vs. the standalone Phase 2 work
 
-```bash
-cd frontend
-npm install
-npm run build
-```
-
-For development with Vite:
-
-```bash
-npm run dev
-```
-
-The built frontend is served by the backend in the final demo path.
-
-### Tests
-
-```bash
-python -m pytest tests/ -q
-```
-
-## Demo
-
-The deterministic flagship path is:
-
-```text
-Dashboard
-  -> M0021
-  -> episode DW-M0021-0178
-  -> Investigate
-  -> planner/tool activity
-  -> evidence
-  -> competing hypotheses
-  -> grounded synthesis
-  -> ESCALATE
-  -> PENDING_HUMAN_REVIEW
-  -> Approve / Override / Request more evidence
-  -> Audit trail
-```
-
-`python -m agent.demo --merchant M0021` runs the underlying investigation flow from the repository root.
-
-## Documentation
-
-- `PROJECT_STATE.md` — current architecture, evaluation, and limitations
-- `DECISIONS.md` — major engineering decisions and reversals
-- `CHANGELOG.md` — phase-by-phase improvements and debugging history
-- `SECURITY.md` — safety and trust-boundary model
-- `PHASE_1_REPORT.md` — correctness foundation and baseline
-- `PHASE_2_REPORT.md` — evidence reasoning and evaluation
-- `PHASE_3_FINAL.md` — episode intelligence and final cleanup
-- `PHASE_4_FINAL.md` — bounded agentic investigation
-- `PHASE_5_FINAL.md` — productization and integration
-
-## Known limitations
-
-- All merchant data is synthetic.
-- The LLM adapter has not been exercised against a live provider.
-- The default planner/synthesis path is deterministic.
-- Narrow episodes are conservatively routed toward more evidence.
-- Seasonal false escalation remains an open limitation at the deterministic episode layer.
-- Episode fragmentation remains non-zero on slow-onset regimes.
-- SQLite + single-process Uvicorn is demo-grade rather than production infrastructure.
-- The frontend has no authentication or multi-operator authorization.
-
-## Project status
-
-**Phase 1–5 complete — submission candidate.**
-
-This repository is a buildathon prototype and engineering demonstration, not a production fraud, compliance, or account-action system.
+The standalone `smart_agg_eval/` codebase (built in earlier phases of this
+project, before this real codebase was uploaded) used a **reconstructed**
+`Chunk` dataclass and a custom retriever/chunker, inferred from the paper's
+prose description. That reconstruction's numbers (93.3% accuracy, 3,582
+avg tokens, 3,175:1 compression, 20.76s latency) do **not** exactly match
+this real codebase's actual recorded experiment
+(`results/experiment_results_financebench_three_methods.json`: Method A =
+94.7% accuracy, 3,331 avg tokens, 3,735:1 compression, 19.28s latency, on
+45 documents / 75 questions). The files in this folder are adapted to the
+real `models.Chunk` / `models.RetrievalResult` and the real
+`SmartAggregation` class, so results from `run_method_a_comparison.py` on
+your machine will be directly comparable to the real, published numbers —
+not the earlier reconstruction's numbers.
