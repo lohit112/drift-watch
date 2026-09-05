@@ -59,6 +59,7 @@ class ConfidenceBreakdown:
     n_support_a: int
     n_support_b: int
     n_missing: int
+    established_ratio: float = 0.0
 
     def to_dict(self) -> dict:
         return {k: (round(v, 3) if isinstance(v, float) else v) for k, v in self.__dict__.items()}
@@ -126,6 +127,28 @@ def compute_confidence(evidence: list[Evidence], n_signal_groups_total: int = 5)
         WEIGHTS["evidence_balance"] * evidence_balance +
         WEIGHTS["novelty"] * novelty
     )
+    # NOTE: an "established pattern" multiplicative discount (dampening
+    # confidence when every deviant group has recurred >=3 times before)
+    # was tried and REVERTED during this phase - see PHASE_3_REPORT.md
+    # "Legitimate Episodes" / self-critique item 5. It measurably reduced
+    # false escalation on a legitimate recurring seasonal merchant, but
+    # ALSO suppressed a genuine fraud case (M0021), because a merchant with
+    # a long clean history can easily accumulate 3+ spurious historical
+    # z-threshold crossings on an UNRELATED feature by chance alone over
+    # 100+ days - the discount can't tell "this specific behavior recurs"
+    # from "this merchant has some noisy feature somewhere in its past."
+    # Left out rather than shipped half-broken; the earlier, more
+    # conservative fix (historical evidence can support B for established
+    # patterns, contributing to evidence_balance only, not a separate
+    # multiplicative override) is kept - it helped a little, safely, and no
+    # further attempt was made to force the rest of the way given the risk
+    # of overfitting to one demo case.
+
+    # established_ratio computed for transparency/diagnostics only (see the
+    # note above) - NOT applied to raw_score.
+    established_for_deviant = [e for e in historical_ev
+                                if e.signal_group in deviant_groups and e.supports_hypothesis == "B"]
+    established_ratio = (len(established_for_deviant) / len(deviant_groups)) if deviant_groups else 0.0
 
     n_missing_groups = len({e.signal_group for e in missing_ev})
     if n_missing_groups > 0:
@@ -141,7 +164,7 @@ def compute_confidence(evidence: list[Evidence], n_signal_groups_total: int = 5)
         temporal_persistence=temporal_persistence, evidence_balance=evidence_balance,
         novelty=novelty, raw_score=raw_score, missing_groups=n_missing_groups,
         final_score=final_score, n_support_a=n_support_a, n_support_b=n_support_b,
-        n_missing=len(missing_ev),
+        n_missing=len(missing_ev), established_ratio=established_ratio,
     )
 
 

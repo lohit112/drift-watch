@@ -148,18 +148,30 @@ def build_signal_evidence(scored_history: pd.DataFrame, flagged_day: int, group_
     prior = scored_history[scored_history["day"] < flagged_day]
     prior_z = prior[f"z_{feat}"].dropna()
     n_prior_extreme = int((prior_z.abs() >= Z_THRESHOLD).sum())
+    # A deviation with NO precedent in this merchant's own history is more
+    # suspicious (supports A); one that has recurred several times before
+    # for this SPECIFIC merchant is positive evidence of an established
+    # pattern for them (supports B) - not merely "neutral." Without this,
+    # a legitimate merchant's 3rd/4th annual seasonal spike still escalates
+    # almost as readily as its first, because "not novel" alone (novelty=0)
+    # only removes one small component's contribution rather than actively
+    # arguing for the legitimate explanation - see PHASE_2_EPISODE_REPORT.md
+    # ("Legitimate Episodes" / self-critique item 5) for the real case this
+    # was found on (M0009, a seasonal merchant).
+    established_pattern = n_prior_extreme >= 3
+    novel = n_prior_extreme == 0
     evidence.append(Evidence(
         source=source, signal_group=group_key, evidence_type="historical",
         observation=float(n_prior_extreme), baseline=None, deviation=None,
         time_window=f"entire prior history (days 0-{flagged_day - 1})",
         direction="n/a",
-        strength="strong" if n_prior_extreme == 0 else ("weak" if n_prior_extreme <= 2 else "n/a"),
-        supports_hypothesis="A" if (n_prior_extreme == 0 and trigger_deviant) else None,
-        contradicts_hypothesis="B" if (n_prior_extreme == 0 and trigger_deviant) else None,
+        strength="strong" if novel else ("weak" if n_prior_extreme <= 2 else "strong"),
+        supports_hypothesis=("A" if (novel and trigger_deviant) else ("B" if established_pattern else None)),
+        contradicts_hypothesis=("B" if (novel and trigger_deviant) else ("A" if established_pattern else None)),
         confidence=0.5,
         summary=(f"{group_key}: this merchant has shown a deviation of this magnitude "
-                 f"{n_prior_extreme} time(s) before in its prior history "
-                 f"({'never before - novel behavior' if n_prior_extreme == 0 else 'has happened before'})."),
+                 f"{n_prior_extreme} time(s) before in its prior history - "
+                 f"{'never before, novel behavior' if novel else (f'an established pattern for this merchant' if established_pattern else 'has happened before, but not enough to call it an established pattern')}."),
     ))
 
     # --- CONTRADICTING: this group did NOT deviate ---

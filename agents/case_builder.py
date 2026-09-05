@@ -25,6 +25,14 @@ from agents.evidence import Evidence
 from agents.investigators import run_all_investigators
 from agents.confidence import compute_confidence, decide_action, ConfidenceBreakdown
 
+HYPOTHESIS_A_TEXT = ("Correlated shift across multiple independent risk signals "
+                      "(transaction pattern, dispute rate, and/or geography/category) "
+                      "consistent with account compromise or a change to riskier "
+                      "business activity.")
+HYPOTHESIS_B_TEXT = ("Legitimate business change (e.g. a sale, seasonal promotion, "
+                      "or planned product/geo expansion) that happens to move one or "
+                      "more of the same surface metrics without genuine risk increase.")
+
 
 @dataclass
 class RiskCase:
@@ -90,13 +98,8 @@ def build_case(scored_history: pd.DataFrame, flagged_day: int, deviant_signal_gr
     confidence = compute_confidence(evidence)
     decision, severity, action = decide_action(confidence)
 
-    hyp_a = ("Correlated shift across multiple independent risk signals "
-             "(transaction pattern, dispute rate, and/or geography/category) "
-             "consistent with account compromise or a change to riskier "
-             "business activity.")
-    hyp_b = ("Legitimate business change (e.g. a sale, seasonal promotion, "
-             "or planned product/geo expansion) that happens to move one or "
-             "more of the same surface metrics without genuine risk increase.")
+    hyp_a = HYPOTHESIS_A_TEXT
+    hyp_b = HYPOTHESIS_B_TEXT
 
     note(f"Risk Confidence Score: {confidence.final_score:.2f} "
          f"(anomaly_strength={confidence.anomaly_strength:.2f}, signal_breadth={confidence.signal_breadth:.2f}, "

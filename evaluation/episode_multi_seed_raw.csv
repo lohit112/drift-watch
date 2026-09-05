@@ -1,0 +1,21 @@
+events_total,events_detected,missed_events,event_recall,event_precision,event_f1,avg_latency_days,median_latency_days,false_positive_episodes,false_alert_rate_nonevent_days,false_alerts_per_merchant,system,seed,duplicate_episode_rate,avg_detection_latency_days,median_detection_latency_days,avg_start_error_days,duplicate_episode_count
+26,24,2,0.923,0.588,0.719,12.21,3.0,35,0.0057,0.833,"Current (day-level, Phase 2)",1,,,,,
+26,24,2,0.923,0.508,0.656,,,29,,0.69,Episode (Phase 3),1,0.208,12.21,3.0,12.17,5.0
+26,20,6,0.769,0.635,0.696,12.4,2.0,31,0.0046,0.738,"Current (day-level, Phase 2)",2,,,,,
+26,20,6,0.769,0.481,0.592,,,28,,0.667,Episode (Phase 3),2,0.2,12.4,2.0,12.4,4.0
+26,19,7,0.731,0.537,0.619,5.0,2.0,37,0.0055,0.881,"Current (day-level, Phase 2)",3,,,,,
+26,19,7,0.731,0.417,0.531,,,35,,0.833,Episode (Phase 3),3,0.211,5.0,2.0,5.0,4.0
+26,20,6,0.769,0.618,0.685,11.0,2.0,34,0.0053,0.81,"Current (day-level, Phase 2)",4,,,,,
+26,20,6,0.769,0.491,0.6,,,29,,0.69,Episode (Phase 3),4,0.35,11.0,2.0,11.0,7.0
+26,23,3,0.885,0.483,0.625,6.43,3.0,46,0.0066,1.095,"Current (day-level, Phase 2)",5,,,,,
+26,23,3,0.885,0.414,0.564,,,41,,0.976,Episode (Phase 3),5,0.261,6.43,3.0,6.43,6.0
+26,20,6,0.769,0.543,0.636,12.4,2.5,43,0.0066,1.024,"Current (day-level, Phase 2)",6,,,,,
+26,20,6,0.769,0.449,0.567,,,38,,0.905,Episode (Phase 3),6,0.4,12.4,2.5,12.4,8.0
+26,24,2,0.923,0.596,0.724,4.71,2.0,36,0.0054,0.857,"Current (day-level, Phase 2)",7,,,,,
+26,24,2,0.923,0.523,0.668,,,31,,0.738,Episode (Phase 3),7,0.292,4.71,2.0,4.71,7.0
+26,19,7,0.731,0.569,0.64,12.0,2.0,31,0.0048,0.738,"Current (day-level, Phase 2)",8,,,,,
+26,19,7,0.731,0.472,0.573,,,28,,0.667,Episode (Phase 3),8,0.263,12.0,2.0,12.0,5.0
+26,19,7,0.731,0.514,0.604,2.74,1.0,34,0.0047,0.81,"Current (day-level, Phase 2)",9,,,,,
+26,19,7,0.731,0.412,0.527,,,30,,0.714,Episode (Phase 3),9,0.105,2.74,1.0,2.74,2.0
+26,23,3,0.885,0.552,0.68,12.57,2.0,39,0.0054,0.929,"Current (day-level, Phase 2)",10,,,,,
+26,23,3,0.885,0.471,0.615,,,37,,0.881,Episode (Phase 3),10,0.261,12.57,2.0,12.57,6.0
