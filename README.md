@@ -134,7 +134,7 @@ The LLM adapter is pluggable and tested against fake transports. **No live provi
 
 ```text
 agent/          bounded agentic investigation
-a gents/        investigators, evidence, confidence, case building
+agents/          investigators, evidence, confidence, case building
 detection/      statistical drift detection
 episode/        risk episode grouping and state machine
 evaluation/     benchmarks, ablations, and evaluation harnesses
