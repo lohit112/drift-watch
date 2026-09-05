@@ -40,7 +40,8 @@ def sanitize_merchant_text(text: str) -> str:
     downstream template/LLM, and never returns it in a context where it
     could be interpreted as an instruction. Currently unused by any field
     that actually varies per-merchant with free text (see module
-    docstring), but exercised directly by tests/test_agent_security.py to
+    docstring), but exercised directly by
+    tests/test_agent_planner_and_loop.py::test_malicious_merchant_text_cannot_change_policy to
     prove it neutralizes injection attempts if such a field existed."""
     import re
     if not isinstance(text, str):

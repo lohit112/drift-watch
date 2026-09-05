@@ -19,8 +19,8 @@ decision point is delegated to a named, testable component:
 THE LOOP ALWAYS TERMINATES: bounded by InvestigationBudget.max_iterations
 AND max_tool_calls (task brief step 8), both hard caps checked every
 iteration, independent of what the planner or hypotheses say. See
-tests/test_agent_loop.py::test_loop_always_terminates for a planner that
-never stops (broken planner) - still bounded by budget.
+tests/test_agent_planner_and_loop.py::test_investigation_loop_always_terminates
+for a planner that never stops (broken planner) - still bounded by budget.
 """
 from dataclasses import dataclass
 from typing import Optional
@@ -75,7 +75,8 @@ class InvestigationResult:
 
 def evaluate_sufficiency(hypothesis_state: HypothesisState, budget: InvestigationBudget,
                            planner_stopped: bool, any_tool_available: bool,
-                           trigger_groups_covered: bool) -> SufficiencyDecision:
+                           trigger_groups_covered: bool,
+                           signal_group_coverage: Optional[set] = None) -> SufficiencyDecision:
     """
     Deterministic sufficiency rule (task brief step 10 - explicitly NOT
     "N tools called = escalate"). Evaluated fresh after every tool call
@@ -88,18 +89,37 @@ def evaluate_sufficiency(hypothesis_state: HypothesisState, budget: Investigatio
     - SUFFICIENT: hypotheses are no longer ambiguous AND the leading
       hypothesis isn't INSUFFICIENT_EVIDENCE itself AND every tool
       relevant to the episode's OWN triggering signal groups has actually
-      been called (`trigger_groups_covered`). This last condition matters:
-      without it, "not ambiguous" is trivially true the moment ANY evidence
-      supports one hypothesis while the other two sit at their untouched
-      default of 0.0 - that's an artifact of nothing having been checked
-      yet, not genuine sufficiency (found and fixed during this phase's
-      own testing - see docs/PHASE_4_ARCHITECTURE.md).
+      been called (`trigger_groups_covered`) AND every signal group in the
+      taxonomy has at least one EPISODE-WINDOW evidence item
+      (`signal_group_coverage` = the set of groups with such evidence).
+
+      These last two conditions guard against the same artifact from two
+      sides. `trigger_groups_covered` (deviant side): without it, "not
+      ambiguous" is trivially true before the trigger has even been
+      investigated. `signal_group_coverage` (quiet side, found and fixed
+      during this phase's own testing): the planner deliberately skips
+      non-deviant groups, and the loop deliberately does not pre-load
+      Phase 3's contradicting evidence for them - so on a
+      selectively-investigated pool the competing hypotheses sit at 0.0
+      NOT because they were checked and rejected but because nothing that
+      could produce their evidence was ever run. Reading "not ambiguous"
+      off that one-sided pool let a genuine refund-up/dispute-down
+      conflict escalate (RISK_DRIFT 0.708) where the deterministic layer,
+      investigating all 5 groups on the same episode and day, correctly
+      stayed at 0.62/REQUEST_MORE_EVIDENCE - the agent layer was MORE
+      escalation-prone than the layer it wraps, violating agent/failures.py's
+      governing rule that an absent check must never increase risk. Bare
+      "historical" entries do NOT count as coverage: they describe prior
+      history, not the group's behavior during THIS episode. Only
+      trigger/contextual/contradicting/missing evidence (missing = the
+      known-unknown case already tracked by Phase 3) establishes what a
+      group did during the episode window.
     - CONFLICTING: still ambiguous, but there is nothing left the planner
       could usefully investigate (planner voluntarily stopped due to
       exhausted relevant tools, not because it resolved anything).
-    - NEED_MORE_EVIDENCE: still ambiguous, or trigger coverage is
-      incomplete, and more relevant investigation is available and
-      affordable.
+    - NEED_MORE_EVIDENCE: still ambiguous, or trigger/signal-group
+      coverage is incomplete, and more relevant investigation is available
+      and affordable.
     """
     if not budget.can_call_tool() or not budget.can_iterate():
         return SufficiencyDecision.BUDGET_EXHAUSTED
@@ -108,7 +128,10 @@ def evaluate_sufficiency(hypothesis_state: HypothesisState, budget: Investigatio
     from agent.models import HypothesisLabel
     if (trigger_groups_covered and not hypothesis_state.is_ambiguous()
             and leading.label != HypothesisLabel.INSUFFICIENT_EVIDENCE):
-        return SufficiencyDecision.SUFFICIENT
+        from detection.signal_taxonomy import SIGNAL_GROUPS
+        covered = signal_group_coverage if signal_group_coverage is not None else set()
+        if all(g in covered for g in SIGNAL_GROUPS):
+            return SufficiencyDecision.SUFFICIENT
 
     if planner_stopped and not any_tool_available:
         return SufficiencyDecision.CONFLICTING
@@ -165,6 +188,15 @@ class InvestigationLoop:
         def trigger_groups_covered() -> bool:
             return relevant_trigger_tools().issubset(set(tools_called))
 
+        def signal_group_coverage() -> set:
+            """Signal groups with at least one EPISODE-WINDOW evidence item
+            (trigger/contextual/contradicting/missing). Bare 'historical'
+            entries are excluded - they describe this merchant's PRIOR
+            history, not the group's behavior during this episode (see
+            evaluate_sufficiency's docstring for why this distinction
+            matters)."""
+            return {e.signal_group for e in registry.all() if e.evidence_type != "historical"}
+
         while True:
             if not self.budget.can_iterate():
                 sufficiency = SufficiencyDecision.BUDGET_EXHAUSTED
@@ -182,7 +214,8 @@ class InvestigationLoop:
             if plan.stop or plan.selected_tool is None:
                 sufficiency = evaluate_sufficiency(hypothesis_state, self.budget, planner_stopped=True,
                                                      any_tool_available=bool(available_tools),
-                                                     trigger_groups_covered=trigger_groups_covered())
+                                                     trigger_groups_covered=trigger_groups_covered(),
+                                                     signal_group_coverage=signal_group_coverage())
                 break
 
             if plan.selected_tool not in self.tools:
@@ -233,7 +266,8 @@ class InvestigationLoop:
             available_tools = [name for name in self.tools if name not in tools_called]
             sufficiency = evaluate_sufficiency(hypothesis_state, self.budget, planner_stopped=False,
                                                  any_tool_available=bool(available_tools),
-                                                 trigger_groups_covered=trigger_groups_covered())
+                                                 trigger_groups_covered=trigger_groups_covered(),
+                                                 signal_group_coverage=signal_group_coverage())
             if sufficiency in (SufficiencyDecision.SUFFICIENT, SufficiencyDecision.CONFLICTING,
                                 SufficiencyDecision.BUDGET_EXHAUSTED, SufficiencyDecision.FAILED):
                 break

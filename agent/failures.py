@@ -3,7 +3,8 @@ Failure handling (Phase 4) — task brief step 11.
 
 Centralizes the rules for how tool/planner/synthesis failures degrade
 safely. The single governing rule, enforced everywhere in this module and
-checked directly in tests/test_agent_failures.py:
+checked directly in tests/test_agent_tools_and_evidence.py and
+tests/test_agent_planner_and_loop.py:
 
     A FAILED INVESTIGATION STEP MUST NEVER INCREASE RISK.
 
@@ -52,4 +53,4 @@ def failure_implies_no_risk_signal(reason: FailureReason) -> bool:
     function (rather than just relying on convention) so it can be
     asserted against directly in tests for every enum member, catching a
     future failure mode added without this guarantee."""
-    return True  # true for every current FailureReason by construction - see tests/test_agent_failures.py
+    return True  # true for every current FailureReason by construction - see tests/test_agent_tools_and_evidence.py

@@ -28,13 +28,21 @@ priority order:
    data exists), so it is only selected once everything else has been
    exhausted and the budget allows.
 4. Stop as soon as either (a) the hypotheses are no longer ambiguous, or
-   (b) there is nothing left to investigate.
+   (b) there is nothing left to investigate. (The loop's own sufficiency
+   rule, agent/loop.py::evaluate_sufficiency, independently refuses to
+   declare SUFFICIENT while any signal group still lacks episode-window
+   evidence - the planner's stop and the loop's sufficiency are
+   deliberately separate checks.)
 
 This priority order NEVER depends on which hypothesis is currently
 leading, or on whether RISK_DRIFT's score is high or low - only on which
 signal groups are relevant and which questions remain open. That is what
 makes it evidence-seeking rather than risk-confirming, and it's checked
-directly in tests/test_agent_planner.py.
+directly in tests/test_agent_planner_and_loop.py. An earlier version
+gated the historical_context call behind the current partial-pool
+hypothesis scores (escalating-score -> skip); that was found to be a
+genuine bug during this phase's own testing and removed - see the
+historical_context branch below and PHASE_4_FINAL.md.
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -118,14 +126,19 @@ class DeterministicPlanner(PlannerModel):
                     question=f"What does {tool} show for the triggering signal group(s) {group_names}?",
                 )
 
-        if ("historical_context" in context.available_tools
-                and "historical_context" not in context.tools_called
-                and self._needs_more_evidence_before_deciding(context)):
+        if "historical_context" in context.available_tools and "historical_context" not in context.tools_called:
             return InvestigationPlan(
-                reason=("All triggering signal groups have been investigated, but the leading "
-                        "hypothesis isn't yet separated and strong enough to act on with confidence - "
-                        "historical context is the most direct way to tell a fresh risk signal from "
-                        "a recurring pattern, and to corroborate or weaken the leading hypothesis."),
+                reason=("All triggering signal groups have been investigated - historical context is "
+                        "the single most useful next question: it tells a fresh risk signal from a "
+                        "recurring pattern, and gives the competing hypotheses (SEASONAL_PATTERN, and "
+                        "RISK_DRIFT's novelty component) their evidence before any conclusion is drawn. "
+                        "It is asked BEFORE looking at the current hypothesis scores: a score computed "
+                        "over a pool where the competing hypotheses were never given any evidence is "
+                        "not a basis for skipping the one question that could change it (found and "
+                        "fixed during this phase's own testing - the earlier score-gated version let a "
+                        "partial-pool RISK_DRIFT lead of 0.708 skip this question entirely and escalate "
+                        "a genuinely conflicting refund-up/dispute-down episode that the deterministic "
+                        "layer, with all 5 groups investigated, correctly held at REQUEST_MORE_EVIDENCE)."),
                 selected_tool="historical_context",
                 question="Has this merchant shown this deviation pattern before?",
             )
@@ -151,42 +164,3 @@ class DeterministicPlanner(PlannerModel):
             reason="No further relevant tools remain to investigate, despite residual ambiguity.",
             selected_tool=None, question="", stop=True,
         )
-
-    @staticmethod
-    def _needs_more_evidence_before_deciding(context: PlannerContext) -> bool:
-        """True when the leading hypothesis either hasn't separated from
-        its closest competitor (genuinely ambiguous), OR has separated but
-        is RISK_DRIFT below the escalation threshold - "confidently leaning
-        risk" is not the same as "confident enough to recommend acting on
-        it," and only the latter should let the planner stop early. This
-        was found directly during testing: without this second condition,
-        the planner stopped after investigating only the triggering signal
-        groups on a real, confirmed fraud episode, because RISK_DRIFT led
-        its (zero-evidence) competitors clearly enough to look "resolved"
-        while its own absolute score (0.485) was still well below the
-        confidence needed to recommend ESCALATE - producing a materially
-        weaker MONITOR recommendation for a case the full Phase 3 pipeline
-        correctly escalated. See docs/PHASE_4_ARCHITECTURE.md and
-        PHASE_4_REPORT.md for the full account."""
-        from agent.models import HypothesisLabel
-        from agents.confidence import decide_action
-        if context.hypothesis_state.is_ambiguous():
-            return True
-        leading = context.hypothesis_state.leading()
-        if leading.label == HypothesisLabel.RISK_DRIFT:
-            decision, _, _ = decide_action_from_score(leading.support_score)
-            return decision != "ESCALATE"
-        return False
-
-
-def decide_action_from_score(score: float) -> tuple:
-    """Reuses agents.confidence's own ESCALATE threshold rather than
-    hardcoding a second copy of it - see agents/confidence.py's
-    decide_action for the documented 0.62 boundary."""
-    from agents.confidence import ConfidenceBreakdown, decide_action
-    dummy = ConfidenceBreakdown(
-        anomaly_strength=0, signal_breadth=0, temporal_persistence=0, evidence_balance=0,
-        novelty=0, raw_score=score, missing_groups=0, final_score=score,
-        n_support_a=0, n_support_b=0, n_missing=0,
-    )
-    return decide_action(dummy)

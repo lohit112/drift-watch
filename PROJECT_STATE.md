@@ -1,8 +1,28 @@
 # Project State
 
-_Last updated: Aug 26, 2026 (session 6 — Phase 3: episode intelligence + stateful risk reasoning)_
+_Last updated: Sep 5, 2026 (session 8 — Phase 5: productization, demo, optional real-LLM adapter)_
 
-## Session 6 — Phase 3 (this update)
+## Session 8 — Phase 5 (this update)
+Full detail in PHASE_5_FINAL.md and README.md. Summary:
+- **Backend (P0)**: FastAPI app (`backend/main.py`) over the existing engine via a thin adapter (`backend/engine.py`) — detection/episode/investigation logic is CALLED, not duplicated. All required endpoints implemented (health, merchants, merchant detail+timeline, episodes, episode detail, investigate, approve, override, audit) plus request-evidence for the review UI. Typed pydantic responses; 404/409/422 semantics; decisions are final (second decision → 409); no endpoint exists that can execute an account action (asserted by test).
+- **Persistence (P0)**: stdlib SQLite (`backend/db.py`) — merchants, episodes, investigations, investigation_evidence, human_decisions, audit_events; seeded from the engine, durable across reopen (tested). No Redis/Kafka/microservices by design.
+- **Frontend (P0)**: React + Vite Risk Ops dashboard (`frontend/`) with Dashboard / Merchant detail / Investigation / Human Review views, zero UI dependencies, Razorpay Blade-flavored light theme (navy #0C2451, brand blue #2B84EB). Built bundle is served by the backend at `/`; `npm run dev` proxies for development. The UI makes ESCALATE ≠ automatic action explicit everywhere (topbar + autonomy explainer under the recommendation banner).
+- **Real-LLM adapter (P1)**: `backend/llm.py` implements the existing `PlannerModel`/`SynthesisModel` interfaces with strict-JSON output, a tool allowlist, registry-locked evidence citations, and the recommendation ALWAYS computed by the shared deterministic rule (`agent/synthesis.py::recommendation_for` — extracted verbatim from the Phase 4 implementation; behavior identical, all prior tests pass). Deterministic implementations remain the default AND the fallback on every failure mode. Credentials only via env/.env (`.env.example` added). Honest status: tested against fake transports; no live provider call was made, so no real-LLM claim.
+- **Security (P1)**: merchant-derived text sanitized before any prompt; malformed model output / invented tools / invented evidence citations rejected with deterministic fallback (each tested); approval bypass impossible (invalid decisions raise, pre-investigation decisions 409, no executable-action route exists).
+- **Tests**: 70 → **102, all passing** (new: test_backend_api.py, test_persistence.py, test_llm_adapter.py). All Phase 1-4 behavior preserved.
+- **Demo**: full 17-step M0021 flow works live and deterministically (dashboard → merchant → episode DW-M0021-0178 → investigate → evidence/hypotheses/synthesis → ESCALATE → PENDING_HUMAN_REVIEW → approve/override → audit trail); M0009 shows REQUEST_MORE_EVIDENCE and the override path.
+- Known limitations carried forward honestly: synthetic data only; LLM adapter unexercised against a live provider; SQLite + single-process uvicorn is demo-grade; Phase 4's narrow-episode conservatism and the D10 deterministic-layer seasonal over-escalation remain documented.
+
+## Prior session summary (session 7 — Phase 4: agentic investigation layer)
+Full detail in PHASE_4_FINAL.md, docs/PHASE_4_ARCHITECTURE.md, and the `agent/` package docstrings. Summary:
+- New `agent/` package: `tools.py` (5 investigation tools wrapping Phase 3's own `build_episode_signal_evidence` — they compute nothing new statistically; ground-truth columns are structurally unreadable by tools), `evidence.py` (EvidenceRegistry with stable EVID-xxx ids), `hypotheses.py` (4-hypothesis state reusing `agents.confidence.compute_confidence` UNCHANGED for RISK_DRIFT), `planner.py` (evidence-seeking `DeterministicPlanner` + pluggable `PlannerModel` interface, explicitly labeled mock), `loop.py` (bounded orchestration only; every decision point delegated to a named component), `synthesis.py` (template-based, grounded — every claim cites a registry evidence_id), `failures.py` ("a failed step never increases risk"), `policy.py` (every ESCALATE starts PENDING_HUMAN_REVIEW; `record_human_decision` is the only approval transition and has no automated caller), `audit.py` (deterministic sequence numbers), `demo.py` (`python -m agent.demo --merchant M0021`).
+- **Found and fixed a genuine one-sided-evidence-pool bug via the failing golden regression**: the agent layer investigates only a narrow episode's deviant signal groups (by design), so competing hypotheses sat at 0.0 *because nothing could produce their evidence*, and "not ambiguous" was read off that artifact — the agent ESCALATEd (RISK_DRIFT 0.708) the exact refund-up/dispute-down episode the deterministic layer correctly held at 0.62/REQUEST_MORE_EVIDENCE. Fix (no thresholds touched): SUFFICIENT now also requires every signal group to have episode-window evidence (bare "historical" entries don't count), and the planner asks its documented historical_context question unconditionally after trigger coverage instead of gating it on the partial-pool score (the score-gated `_needs_more_evidence_before_deciding` was removed as the bug it was).
+- Verified consequences on real runs: seed-303 conflicting episode now REQUEST_MORE_EVIDENCE (agrees with deterministic layer); M0021 flagship still ESCALATE (0.785, fully grounded, PENDING_HUMAN_REVIEW); M0009 — the seasonal false-escalation case of DECISIONS.md D10 — is no longer over-escalated by the agent layer (REQUEST_MORE_EVIDENCE via honest coverage accounting, not a tuned discount); the deterministic episode layer's own D10 limitation remains open.
+- Known, accepted tradeoff (documented, not hidden): genuinely narrow fraud episodes resolve to REQUEST_MORE_EVIDENCE at the agent layer because quiet groups are never investigated (tests #1/#3 forbid it) — the conservative direction, and the direct consequence of that design.
+- Test suite: 49 → 70, all passing, including the full Phase 3 regression set (episode invariants, golden episodes/cases, confidence model). Phases 1–3 source files untouched.
+- Bounded execution, grounding, safe failure, audit-trail coherence, approval boundary, and reproducibility verified by direct scripted checks against the real dataset (see PHASE_4_FINAL.md).
+
+## Prior session summary (session 6 — Phase 3: episode intelligence + stateful risk reasoning)
 Full detail in PHASE_2_EPISODE_BASELINE.md, docs/EPISODE_MODEL.md, docs/STATE_MACHINE.md, docs/EPISODE_EVIDENCE.md, evaluation/EPISODE_EVALUATION.md, evaluation/EPISODE_ABLATIONS.md, PHASE_3_REPORT.md. Summary:
 - New `episode/` package: `grouping.py` (gap-tolerant clustering, gap=2 derived from real data), `model.py` (`RiskEpisode` dataclass), `state_machine.py` (WATCH/INVESTIGATING/ESCALATE/RESOLVED), `aggregation.py` (episode-to-date evidence with duty-cycle persistence, deduplicated by construction), `builder.py` (orchestrator).
 - **Fixed the confidence-trajectory flip-flop** documented in PHASE_2_EPISODE_BASELINE.md: M0021's real 10-day fraud episode previously oscillated ESCALATE/REQUEST_MORE_EVIDENCE day to day; now stays consistently ESCALATE (0.79) from day 178 through resolution. Verified with real regression tests (`tests/test_episode_invariants.py`, `tests/test_golden_episodes.py`), not just the one demo case.
@@ -77,27 +97,21 @@ See AUDIT_REPORT.md, PHASE_1_BASELINE.md, and PHASE_1_REPORT.md for full detail.
 
 Day-level metrics (unchanged from session 1, kept alongside — see README/PHASE_1_REPORT for why both are shown): precision 0.519/0.573, recall 0.154/0.520, F1 0.237/0.545 for Drift Watch/static respectively.
 
-## Next bottleneck: REAL AGENTIC INVESTIGATION
+## Current frontier: REAL LLM BEHIND THE AGENTIC SEAM
 
-The deterministic core (detector → structured evidence → episode
-aggregation → confidence → state machine) is now the FOUNDATION, not the
-frontier. Three phases have built and honestly evaluated it: Phase 1
-established correctness and reproducibility, Phase 2 built structured
-multi-temporal evidence and a defensible confidence model, Phase 3 made
-episodes first-class, stateful objects with a verified fix for the
-confidence-trajectory flip-flop. Every remaining deterministic-layer gap
-below is real and worth fixing, but none of them is what's currently
-limiting the project — a fixed, unconditional 5-investigator pipeline that
-always runs the same steps regardless of what actually triggered a flag is
-the bottleneck now. The next phase should build a genuine agentic
-investigation layer on top of this foundation: dynamic evidence-gathering
-tool selection (skip the Geography Investigator on a pure refund-rate
-trigger, the way a real analyst would), LLM-driven hypothesis generation
-that can propose explanations the fixed rule table doesn't anticipate, and
-narrative synthesis grounded in the structured evidence this core already
-produces — without letting the LLM touch the actual confidence/decision
-math, per DECISIONS.md D4's prompt-injection reasoning. Do not start this
-until explicitly asked to.
+The deterministic core plus the agentic orchestration layer are now complete:
+Phase 4 added the evidence-seeking planner, typed tools, grounded synthesis,
+bounded loop, failure policy, and human-approval boundary (see PHASE_4_FINAL.md
+and docs/PHASE_4_ARCHITECTURE.md). What remains deliberately deterministic is
+the planner's and synthesis model's *implementation* — both sit behind
+pluggable interfaces (`PlannerModel`, `SynthesisModel`) with explicitly-labeled
+mock implementations, which is the designed seam for a real LLM. Plugging one
+in requires the injection-verification checklist in
+docs/PHASE_4_ARCHITECTURE.md "Security" (adversarial tests over every field
+the model reads, model output only entering via the grounded-template path,
+and the model never writing a number that didn't come from an AgentEvidence)
+— per DECISIONS.md D4, the confidence/decision math stays out of the model's
+hands either way. Do not start this until explicitly asked to.
 
 ## Remaining deterministic-layer hardening (parallel track, not blocking the agentic layer)
 1. **Reduce episode false-positive fragmentation on slow-onset regimes.** Duplicate episode rate is 25.5% (mean, 10 seeds) on the richer benchmark — `GAP_TOLERANCE_DAYS=2` (derived from the original benchmark's fraud archetypes) isn't always enough for `slow_fraud`'s 30-day ramp. Consider an adaptive gap tolerance keyed to a regime's observed onset speed, rather than one fixed constant.
@@ -109,8 +123,8 @@ until explicitly asked to.
 7. Minimal frontend: merchant list by episode status, episode detail view (confidence trajectory chart + evidence timeline + transition log + hypotheses + approval buttons).
 8. Prompt-injection adversarial tests once the agentic/LLM layer exists.
 
-## Current competitive self-score (honest, reflects current repository state — see PHASE_3_REPORT.md "CURRENT PROJECT SCORE" for the full breakdown)
-Problem 8 · Originality 6 · Razorpay relevance 7 · Detection 6 (leakage-free and honestly evaluated — Phase 1 found and fixed the static comparator's temporal leakage, verified still fixed in every subsequent phase's reruns; day-level recall and richer-benchmark F1 remain genuinely weak, both disclosed) · Episode intelligence 7 (the confidence flip-flop is genuinely fixed and regression-tested; the seasonal-merchant false-escalation is real, partially fixed, and still open) · Explainability 8 · Engineering 7 · Evaluation 8 (the project's strongest asset — multi-seed, ablations, and a consistent record of reporting findings that contradict its own prior claims rather than hiding them) · Security 6 (no unsafe code; genuinely untested at scale, no LLM injection surface exists yet by design) · Agent-readiness 5 (structured evidence is a good substrate for a future LLM layer, but investigator selection is still unconditional and nothing agentic exists yet — this is exactly the next bottleneck named above) · **Overall 6.8/10**.
+## Current competitive self-score (honest, reflects current repository state — see PHASE_4_FINAL.md and PHASE_3_REPORT.md for the phase-level breakdowns)
+Problem 8 · Originality 6 · Razorpay relevance 7 · Detection 6 (leakage-free and honestly evaluated — Phase 1 found and fixed the static comparator's temporal leakage, verified still fixed in every subsequent phase's reruns; day-level recall and richer-benchmark F1 remain genuinely weak, both disclosed) · Episode intelligence 7 (the confidence flip-flop is genuinely fixed and regression-tested; the seasonal-merchant false-escalation is real, partially fixed — the Phase 4 agent layer no longer over-escalates M0009 — but still open at the deterministic episode layer) · Explainability 8 · Engineering 7 · Evaluation 8 (the project's strongest asset — multi-seed, ablations, and a consistent record of reporting findings that contradict its own prior claims rather than hiding them) · Security 7 (structural approval boundary + no free-text injection surface + grounded synthesis; still no adversarial tests against a real LLM because none is wired in) · Agent-readiness 7 (genuine agentic layer now exists — evidence-seeking planner, typed tools, bounded loop, failure policy, audit trail, pluggable model seams — but the planner/synthesis implementations are labeled deterministic mocks, and narrow episodes resolve conservatively to REQUEST_MORE_EVIDENCE by documented design) · **Overall 7.1/10**.
 
-**What would make a Razorpay engineer push back today**: no frontend, the reasoning layer isn't agentic yet (fixed pipeline, not a planner — this is the deliberately-deferred next bottleneck named above), and a legitimate recurring seasonal merchant can still false-escalate on repeat occurrences (DECISIONS.md D10 documents a reverted fix attempt and why it broke real fraud detection). All three are explicit, tracked priorities — not surprises.
+**What would make a Razorpay engineer push back today**: no frontend/backend, the planner and synthesis are deterministic mocks behind their interfaces (a real LLM is the designed next step, with the injection checklist in docs/PHASE_4_ARCHITECTURE.md), the agent layer is deliberately more conservative than the deterministic layer on narrow episodes (REQUEST_MORE_EVIDENCE instead of ESCALATE — defensible, but a reviewer will ask about it), and a legitimate recurring seasonal merchant can still false-escalate at the deterministic episode layer (DECISIONS.md D10). All four are explicit, tracked priorities — not surprises.
 

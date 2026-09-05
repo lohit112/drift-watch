@@ -4,7 +4,8 @@ Audit trail (Phase 4) — task brief step 14.
 Deterministic sequence numbers, not timestamps, are the primary ordering
 key (task brief's explicit preference, "for tests") - this makes audit
 trails directly comparable across runs for reproducibility tests
-(tests/test_agent_reproducibility.py) without needing to mock the clock.
+(tests/test_agent_planner_and_loop.py::test_same_deterministic_inputs_produce_reproducible_orchestration)
+without needing to mock the clock.
 A wall-clock timestamp is still recorded for realism but is never load-
 bearing for ordering or test assertions.
 """
