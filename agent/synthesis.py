@@ -60,6 +60,29 @@ def check_grounding(narrative: str, registry: EvidenceRegistry) -> tuple:
     return cited, (len(unknown) == 0)
 
 
+def recommendation_for(sufficiency: SufficiencyDecision, leading_label, leading_support_score: float) -> Recommendation:
+    """The ONE recommendation rule, shared by every SynthesisModel
+    implementation (deterministic and LLM-backed): the recommendation is
+    ALWAYS derived deterministically from the sufficiency decision and the
+    evidence-backed hypothesis state - never from model-generated text
+    (DECISIONS.md D4: the LLM never touches decision math). Extracted
+    verbatim from DeterministicSynthesis.synthesize in Phase 5 so the LLM
+    adapter reuses it instead of duplicating it; the deterministic
+    implementation's behavior is unchanged."""
+    if sufficiency == SufficiencyDecision.FAILED:
+        return Recommendation.REQUEST_MORE_EVIDENCE
+    if sufficiency in (SufficiencyDecision.NEED_MORE_EVIDENCE, SufficiencyDecision.CONFLICTING,
+                       SufficiencyDecision.BUDGET_EXHAUSTED):
+        return Recommendation.REQUEST_MORE_EVIDENCE
+    # SUFFICIENT
+    from agent.models import HypothesisLabel
+    if leading_label == HypothesisLabel.RISK_DRIFT and leading_support_score > 0.62:
+        return Recommendation.ESCALATE
+    if leading_label == HypothesisLabel.INSUFFICIENT_EVIDENCE:
+        return Recommendation.REQUEST_MORE_EVIDENCE
+    return Recommendation.MONITOR
+
+
 class SynthesisModel:
     def synthesize(self, hypothesis_state: HypothesisState, registry: EvidenceRegistry,
                     sufficiency: SufficiencyDecision) -> SynthesizedCase:
@@ -98,13 +121,7 @@ class DeterministicSynthesis(SynthesisModel):
             recommendation = Recommendation.REQUEST_MORE_EVIDENCE
         else:  # SUFFICIENT
             narrative = " ".join(sentences) + f" Leading hypothesis: {leading.label.value}."
-            from agent.models import HypothesisLabel
-            if leading.label == HypothesisLabel.RISK_DRIFT and leading.support_score > 0.62:
-                recommendation = Recommendation.ESCALATE
-            elif leading.label == HypothesisLabel.INSUFFICIENT_EVIDENCE:
-                recommendation = Recommendation.REQUEST_MORE_EVIDENCE
-            else:
-                recommendation = Recommendation.MONITOR
+            recommendation = recommendation_for(sufficiency, leading.label, leading.support_score)
 
         cited_ids, is_grounded = check_grounding(narrative, registry)
         if not is_grounded:
