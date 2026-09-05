@@ -101,6 +101,12 @@ The current full automated suite is **102 passing tests**.
 
 The benchmarks are intentionally reported with their tradeoffs. Drift Watch does not universally beat the static comparator: on the richer benchmark, it improves recall/false-alert behavior but has lower precision/F1 and slower average detection latency. Episode grouping also does not improve raw precision/F1. These results are preserved rather than optimized away.
 
+## Development workflow
+
+The project was developed iteratively against a real local repository. Python and pytest were used for the detection, episode, agent, API, persistence, and failure-path checks; the React/Vite frontend was built separately and then exercised through the FastAPI application. Claude Code and ZCode were used as coding-agent environments during implementation, but changes were kept reviewable in the repository and validated with deterministic tests and local runs.
+
+The useful engineering record is the code, tests, evaluation artifacts, Git commits, decisions, and documented reversals—not an assumption that the first implementation was correct.
+
 ## Development evolution
 
 ```text

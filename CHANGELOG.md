@@ -57,7 +57,7 @@ This changelog records the engineering progression of Drift Watch. It intentiona
 
 ## Late-night debugging highlights
 
-Some of the hardest fixes happened during the final overnight push, especially around Phase 3/4 behavior. The useful record is not the hour on the clock; it is what changed under pressure:
+Some of the hardest fixes happened during the final overnight push, especially around Phase 3/4 behavior. This section records the actual technical problems and fixes; it does not invent timestamps or claim that late hours themselves are an engineering accomplishment.
 
 - A failing golden episode exposed that the agent could escalate an ambiguous case because unexplored hypotheses were being mistaken for negative evidence. The fix was to make sufficiency depend on actual signal-group coverage and to gather historical context unconditionally after trigger coverage.
 - A missing deviation field in `AgentEvidence` was caught by tracing why anomaly strength was unexpectedly low. The field was restored rather than compensating with a larger threshold weight.
