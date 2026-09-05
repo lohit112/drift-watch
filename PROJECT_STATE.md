@@ -1,8 +1,19 @@
 # Project State
 
-_Last updated: Aug 24, 2026 (session 4 — independent Phase 1 re-audit)_
+_Last updated: Aug 24, 2026 (session 5 — Phase 2: detection intelligence + evidence reasoning)_
 
-## Session 4 — independent re-audit (this update)
+## Session 5 — Phase 2 (this update)
+Full detail in PHASE_2_BASELINE.md, docs/EVIDENCE_MODEL.md, docs/CONFIDENCE_MODEL.md, evaluation/BASELINE_EXPERIMENTS.md, evaluation/MULTI_SEED_EVALUATION.md, PHASE_2_REPORT.md. Summary:
+- Replaced unstructured `Finding` objects with typed `Evidence` (trigger/contextual/historical/contradicting/missing) built directly from the detector's own baseline columns — structurally fixes the Phase 1 §9 temporal-mismatch weakness (verified: the flagship fraud case now escalates by day 180 of its onset, once persistence confirms it, instead of permanently reading "Monitor only").
+- Replaced the heuristic confidence formula with a documented, 5-component Risk Confidence Score (`agents/confidence.py`) and a 3-way decision (ESCALATE/MONITOR/REQUEST_MORE_EVIDENCE).
+- Added a Refund Investigator - Phase 1 never had one despite `refund` being one of the 5 signal groups, a real gap found this session.
+- Formalized the signal taxonomy (`detection/signal_taxonomy.py`) as a shared source of truth; documented 2 of 7 taxonomy dimensions (customer behavior, settlement/payment) as fully uncovered.
+- Expanded the synthetic benchmark from 6 to 19 archetypes (`build_richer_population`), evaluated across 10 independent seeds.
+- **Honest, non-cherry-picked finding**: on the harder 19-archetype benchmark, Drift Watch's event F1 (0.663) and latency (9.15d) are slightly worse than the naive static-threshold comparator's (0.701, 6.97d), even though recall is higher and false-alert rate is lower and far more stable. This reverses part of the Phase 1 headline claim, which was only measured on 4 fast, strong, coordinated fraud events. See evaluation/MULTI_SEED_EVALUATION.md.
+- Compared 3 baseline computation methods (rolling mean/std, rolling median/MAD, EWMA); kept the shipped mean/std method (best F1, fastest) after reproducing all 3 on 2 datasets.
+- Added 3 golden-case tests, 8 confidence-model unit tests, 5 failure-handling tests. Test suite: 19 → 37, all passing.
+
+## Prior session summary (session 4 — independent Phase 1 re-audit, Aug 24 2026)
 A fresh Phase 1 audit was run treating the repository as the only source of truth (prior session's docs were not trusted, only used as leads to verify). Full detail in PHASE_1_AUDIT.md, PHASE_1_BASELINE.md, docs/TEMPORAL_WINDOWS.md, PHASE_1_REPORT.md. Summary:
 - **Confirmed accurate**: data generation determinism, detector's own 81/5760 flag count, day-level and event-level metrics, the previously-fixed event/evidence alignment bug and `eval()`→`ast.literal_eval` fix, no hardcoded paths, no unsafe code in the live pipeline. 14/14 prior tests genuinely pass.
 - **Found 1 real, previously deferred bug and fixed it**: `static_threshold_baseline`'s txn_count leg computed a single `.quantile(0.98)` over the entire dataset (all future days included) — real temporal leakage in the comparison strawman. Fixed to an expanding, history-only, day-indexed quantile with a minimum-history warm-up. This changed the static comparator's day-level precision from 0.573 → 0.561 and FPR from 1.93% → 2.02% (small but real; Drift Watch's own numbers are unaffected). 2 new regression tests added.
@@ -56,14 +67,16 @@ See AUDIT_REPORT.md, PHASE_1_BASELINE.md, and PHASE_1_REPORT.md for full detail.
 
 Day-level metrics (unchanged from session 1, kept alongside — see README/PHASE_1_REPORT for why both are shown): precision 0.519/0.573, recall 0.154/0.520, F1 0.237/0.545 for Drift Watch/static respectively.
 
-## Next session priorities (in order — updated post-session-4 re-audit)
-1. **Reconcile investigator evidence windows with the detector's per-day sensitivity** (or change demo-day selection to prefer a day with stronger corroborating evidence within the flagged run) — top priority, since the current mismatch produces a "Monitor only" recommendation for the flagship fraud demo case. See docs/TEMPORAL_WINDOWS.md §3.
-2. Replace the arbitrary confidence formula (`0.15 + 0.22 * n_risk_signals`) with defensible, documented components (detector strength, signal magnitude, signal independence, temporal consistency, evidence quality, hypothesis separation). Note: AUDIT_REPORT.md previously claimed this was already done — it was not; do not skip this item.
-3. Make the case builder's investigator selection genuinely agentic — currently all 4 investigators always run regardless of which signal group triggered the flag; a real planner would skip investigators clearly irrelevant to the trigger (e.g. skip Geography Investigator on a pure refund-rate trigger). This is the top "agentic depth" credibility gap per AUDIT_REPORT.md.
-4. Wire the real Claude API call into case_builder.py for narrative generation, with grounding-evidence-only prompting.
-5. FastAPI backend wrapping the existing detection/agents modules + PostgreSQL for persistence.
-6. Minimal frontend: merchant list by health state, case detail view (timeline + evidence + hypotheses + approval buttons).
-7. Prompt-injection adversarial tests once the LLM integration exists.
+## Next session priorities (in order — updated post-Phase-2)
+1. **Aggregate confidence across a whole flagged episode**, not a single day snapshot — top priority. Directly observed flip-flopping (ESCALATE → ESCALATE → REQUEST_MORE_EVIDENCE) across days 180/182/185 of the same real M0021 fraud episode. Likely also narrows the multi-seed F1/latency gap (see PHASE_2_REPORT.md).
+2. Investigate whether a lower MIN_SIGNALS_FOR_FLAG for very high-z single-signal anomalies recovers recall/latency on the richer benchmark's slow/single-signal regimes (refund_abuse, dispute_escalation, slow_fraud) without losing the false-alert-rate stability advantage.
+3. Build a symmetric Hypothesis B numeric score (currently qualitative/evidence-list only - task brief step 12 scoped only Hypothesis A for Phase 2).
+4. Make the case builder's investigator selection genuinely agentic — still runs all 5 investigators unconditionally regardless of trigger.
+5. Add CUSTOMER_BEHAVIOR and SETTLEMENT/PAYMENT signal groups (currently fully uncovered - no feature exists for either).
+6. Wire the real Claude API call into case_builder.py for narrative generation, with grounding-evidence-only prompting.
+7. FastAPI backend wrapping the existing detection/agents modules + PostgreSQL for persistence.
+8. Minimal frontend: merchant list by health state, case detail view (timeline + evidence + hypotheses + approval buttons).
+9. Prompt-injection adversarial tests once the LLM integration exists.
 
 ## Current competitive self-score (honest, updated post-Phase-1)
 Problem 8 · Novelty 8 · Razorpay alignment 8 · Agentic behavior 5 (audit downgraded this from 6 — case builder runs a fixed pipeline, not genuine tool selection; see AUDIT_REPORT.md) · Technical depth 7 · ML quality 7 (event-level numbers are strong; static baseline leakage still needs fixing) · Explainability 8 · Security 4 (not yet tested against real LLM) · UX 2 (no frontend yet) · Demo 6 (CLI only, but now correctly aligned end-to-end and backed by real event-level numbers) · Business impact 6 (estimated, not measured against real ops data) · Engineering maturity 9 (honest bug log, reproducible baseline, 14 passing regression tests, found-but-deferred issues explicitly flagged rather than hidden)

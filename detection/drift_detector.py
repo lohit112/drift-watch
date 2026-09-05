@@ -8,23 +8,23 @@ EWMA, and z-scores per feature. The output feeds the agent/reasoning layer
 (see agents/), which is responsible for correlation, hypothesis generation,
 and explanation — NOT for recomputing these numbers.
 """
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import numpy as np
 import pandas as pd
+
+from detection.signal_taxonomy import SIGNAL_GROUPS as _TAXONOMY_GROUPS
 
 FEATURES = ["txn_count", "txn_volume", "refund_rate", "dispute_rate",
             "category_entropy", "geo_entropy"]
 
-# txn_count and txn_volume are algebraically correlated (volume ~ count * avg_value),
-# so they must NOT count as two independent signals toward the correlation threshold -
-# doing so double-counts a single real signal and was inflating false positives in v0
-# (see DECISIONS.md). Signals are grouped into independent domains instead.
-SIGNAL_GROUPS = {
-    "volume": ["txn_count", "txn_volume"],
-    "refund": ["refund_rate"],
-    "dispute": ["dispute_rate"],
-    "category_mix": ["category_entropy"],
-    "geo_mix": ["geo_entropy"],
-}
+# Single shared source of truth for signal grouping - see detection/signal_taxonomy.py
+# for the correlation rationale. Kept as a plain {name: [features]} dict here since
+# that's what the rest of this module was written against.
+SIGNAL_GROUPS = {k: list(v.features) for k, v in _TAXONOMY_GROUPS.items()}
 
 BASELINE_WINDOW = 60      # days used to establish each merchant's own baseline
 Z_THRESHOLD = 2.5         # per-feature deviation threshold
@@ -69,6 +69,14 @@ def merchant_specific_drift(df: pd.DataFrame) -> pd.DataFrame:
         g["predicted_drift_ms"] = (n_signal_groups >= MIN_SIGNALS_FOR_FLAG).astype(int)
         for feat in FEATURES:
             g[f"z_{feat}"] = z_scores[feat]
+            # PHASE 2: expose the exact baseline mean/std this detector used for each
+            # feature/day, so investigators can build TRIGGER evidence from the same
+            # numbers the detector actually flagged on, instead of recomputing a
+            # differently-windowed comparison that can disagree with the detector
+            # (see PHASE_1_REPORT.md §9 / docs/EVIDENCE_MODEL.md).
+            g[f"baseline_mean_{feat}"] = g[feat].rolling(BASELINE_WINDOW, min_periods=20).mean().shift(1)
+            g[f"baseline_std_{feat}"] = g[feat].rolling(BASELINE_WINDOW, min_periods=20).std().shift(1)
+            g[f"baseline_days_{feat}"] = g[feat].rolling(BASELINE_WINDOW, min_periods=1).count().shift(1).fillna(0)
 
         out_rows.append(g)
 

@@ -1,0 +1,7 @@
+events_total,events_detected,missed_events,event_recall,event_precision,event_f1,avg_latency_days,median_latency_days,false_positive_episodes,false_alert_rate_nonevent_days,false_alerts_per_merchant,method,dataset,compute_seconds
+4,4,0,1.0,0.205,0.34,1.0,1.0,31,0.0071,1.292,rolling_mean_std,"original (single-seed, 24 merchants)",0.206
+4,4,0,1.0,0.067,0.125,1.0,1.0,56,0.0126,2.333,rolling_median_mad,"original (single-seed, 24 merchants)",1.165
+4,4,0,1.0,0.121,0.216,1.0,1.0,29,0.0053,1.208,ewma,"original (single-seed, 24 merchants)",0.221
+26,22,4,0.846,0.605,0.705,3.82,2.0,34,0.0054,0.81,rolling_mean_std,"richer (13 additional regimes, 42 merchants)",0.373
+26,24,2,0.923,0.492,0.642,5.58,2.0,64,0.0106,1.524,rolling_median_mad,"richer (13 additional regimes, 42 merchants)",2.051
+26,20,6,0.769,0.478,0.589,8.95,2.0,35,0.005,0.833,ewma,"richer (13 additional regimes, 42 merchants)",0.399

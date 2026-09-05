@@ -111,6 +111,89 @@ def event_level_evaluation(df: pd.DataFrame, pred_col: str) -> dict:
     }
 
 
+def event_table(df: pd.DataFrame, pred_col: str) -> pd.DataFrame:
+    """Per-event detail table (task brief step 7): one row per ground-truth
+    event with merchant, event_start, event_end, first_detection, latency,
+    number_of_alerts, detected (yes/no)."""
+    rows = []
+    for mid, g in df.groupby("merchant_id"):
+        g = g.sort_values("day").reset_index(drop=True)
+        is_event = g["true_drift"] == 1
+        event_id = (is_event != is_event.shift(fill_value=False)).cumsum()
+        for eid, run in g[is_event].groupby(event_id[is_event]):
+            start, end = int(run["day"].min()), int(run["day"].max())
+            flags_in_window = g[(g["day"] >= start) & (g["day"] <= end) & (g[pred_col] == 1)]
+            detected = not flags_in_window.empty
+            rows.append({
+                "merchant_id": mid,
+                "drift_kind": run["drift_kind"].iloc[0],
+                "event_start": start,
+                "event_end": end,
+                "first_detection": int(flags_in_window["day"].min()) if detected else None,
+                "latency": int(flags_in_window["day"].min() - start) if detected else None,
+                "number_of_alerts": int(len(flags_in_window)),
+                "detected": detected,
+            })
+    return pd.DataFrame(rows)
+
+
+def event_level_evaluation_v2(df: pd.DataFrame, pred_col: str) -> dict:
+    """
+    Task brief step 7 - full event-level metrics including event PRECISION
+    (not just recall): an "alert episode" is a contiguous run of pred_col==1
+    for a merchant; it counts as a true positive episode if it overlaps ANY
+    true_drift==1 day for that merchant, else it's a false-positive episode.
+    This is distinct from `event_level_evaluation` above (kept for Phase 1
+    backward compatibility), which only measured recall/false-alert-rate at
+    the day level within/outside event windows.
+    """
+    events = event_table(df, pred_col)
+    events_total = len(events)
+    events_detected = int(events["detected"].sum())
+    latencies = events.loc[events["detected"], "latency"].tolist()
+
+    # Alert episodes (contiguous flagged runs) and whether each overlaps a true event
+    alert_rows = []
+    for mid, g in df.groupby("merchant_id"):
+        g = g.sort_values("day").reset_index(drop=True)
+        is_alert = g[pred_col] == 1
+        alert_id = (is_alert != is_alert.shift(fill_value=False)).cumsum()
+        for aid, run in g[is_alert].groupby(alert_id[is_alert]):
+            overlaps_true_event = bool((run["true_drift"] == 1).any())
+            alert_rows.append({"merchant_id": mid, "overlaps_true_event": overlaps_true_event})
+    alerts_df = pd.DataFrame(alert_rows) if alert_rows else pd.DataFrame(columns=["merchant_id", "overlaps_true_event"])
+    total_alert_episodes = len(alerts_df)
+    true_positive_episodes = int(alerts_df["overlaps_true_event"].sum()) if total_alert_episodes else 0
+    false_positive_episodes = total_alert_episodes - true_positive_episodes
+
+    event_recall = events_detected / events_total if events_total else None
+    event_precision = true_positive_episodes / total_alert_episodes if total_alert_episodes else None
+    event_f1 = (2 * event_precision * event_recall / (event_precision + event_recall)
+                if event_recall and event_precision else None)
+
+    non_event_days = 0
+    false_alert_days = 0
+    n_merchants = df["merchant_id"].nunique()
+    for mid, g in df.groupby("merchant_id"):
+        ne = g[g["true_drift"] == 0]
+        non_event_days += len(ne)
+        false_alert_days += int((ne[pred_col] == 1).sum())
+
+    return {
+        "events_total": events_total,
+        "events_detected": events_detected,
+        "missed_events": events_total - events_detected,
+        "event_recall": round(event_recall, 3) if event_recall is not None else None,
+        "event_precision": round(event_precision, 3) if event_precision is not None else None,
+        "event_f1": round(event_f1, 3) if event_f1 is not None else None,
+        "avg_latency_days": round(sum(latencies) / len(latencies), 2) if latencies else None,
+        "median_latency_days": round(pd.Series(latencies).median(), 2) if latencies else None,
+        "false_positive_episodes": false_positive_episodes,
+        "false_alert_rate_nonevent_days": round(false_alert_days / non_event_days, 4) if non_event_days else None,
+        "false_alerts_per_merchant": round(false_positive_episodes / n_merchants, 3) if n_merchants else None,
+    }
+
+
 if __name__ == "__main__":
     df = pd.read_csv(os.path.join(REPO_ROOT, "detection", "scored_events.csv"))
     df["deviant_features"] = df["deviant_features"].fillna("[]")

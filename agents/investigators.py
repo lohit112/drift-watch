@@ -1,133 +1,189 @@
 """
-Investigator sub-agents (Bumblebee-style Fetchers).
+Investigator sub-agents (Bumblebee-style Fetchers) — Phase 2 rewrite.
 
-Each investigator owns ONE evidence domain and returns a structured finding.
-They do not decide risk themselves - that's the Evidence Correlator / Case
-Builder's job. This separation is deliberate: investigators are deterministic
-and auditable; only the planner/case-builder layer does open-ended reasoning.
+One investigator per independent signal group (see detection/signal_taxonomy.py):
+Volume, Refund, Dispute, Category, Geography. Each investigator builds a list
+of typed Evidence objects (agents/evidence.py) for its own signal group:
+
+  TRIGGER      - the detector's own flagged-day observation vs its own
+                 baseline_mean/std (never recomputed independently - this is
+                 the Phase 1 §9 fix: trigger evidence is now, by
+                 construction, the same number the detector flagged on).
+  CONTEXTUAL   - 3-day and 7-day trailing windows ending on the flagged day,
+                 compared to the same baseline, so a reviewer can see
+                 whether the trigger was a one-day blip or is persisting.
+  HISTORICAL   - how many times this specific feature has deviated this
+                 much before, anywhere earlier in this merchant's own
+                 history (not the population).
+  CONTRADICTING - emitted for this group when it did NOT deviate at all
+                 (weak evidence against Hypothesis A for that dimension).
+  MISSING      - emitted instead of all of the above when the merchant
+                 does not yet have enough baseline history for this
+                 feature to be assessed with any confidence.
+
+Investigators consume the DETECTOR'S OWN SCORED OUTPUT (the per-merchant
+dataframe from detection.drift_detector.merchant_specific_drift, which
+carries z_<feature>, baseline_mean_<feature>, baseline_std_<feature>,
+baseline_days_<feature> columns) rather than raw unscored history - this is
+what guarantees trigger evidence can never disagree with the detector about
+what happened on the flagged day.
 """
-from dataclasses import dataclass, field
-from typing import Any
+from typing import Optional
 import pandas as pd
 
+from detection.drift_detector import FEATURES, Z_THRESHOLD, BASELINE_WINDOW
+from detection.signal_taxonomy import SIGNAL_GROUPS
+from agents.evidence import Evidence, strength_from_z, direction_from_delta
 
-@dataclass
-class Finding:
-    investigator: str
-    summary: str
-    detail: dict
-    supports_risk: bool  # does this finding lean toward the risk hypothesis?
+MIN_BASELINE_DAYS = 15  # below this, a feature's evidence is MISSING, not "no deviation"
 
+INVESTIGATOR_NAMES = {
+    "volume": "Volume Investigator",
+    "refund": "Refund Investigator",
+    "dispute": "Dispute Investigator",
+    "category_mix": "Category Investigator",
+    "geo_mix": "Geography Investigator",
+}
 
-def _baseline_window(history: pd.DataFrame, flagged_day: int, recent_span: int = 5, min_baseline_days: int = 15):
-    """
-    Baseline = everything from day 0 up to (flagged_day - recent_span),
-    capped at 60 days back. Falls back gracefully for merchants flagged
-    early (before a full 60-day baseline exists) instead of returning an
-    empty/undefined baseline - avoids the "compared against nothing"
-    bug found during testing (see DECISIONS.md).
-    """
-    baseline_end = flagged_day - recent_span
-    baseline_start = max(0, baseline_end - 60)
-    baseline = history[(history["day"] >= baseline_start) & (history["day"] < baseline_end)]
-    recent = history[(history["day"] > baseline_end) & (history["day"] <= flagged_day)]
-    return baseline, recent, len(baseline) >= min_baseline_days
+# Which signal group a coordinated risk episode ("Hypothesis A") would
+# typically ALSO move, used to decide whether a non-deviant group counts as
+# meaningful contradicting evidence. All 5 groups qualify - a real account
+# compromise / fraud drift plausibly touches any of them (see the "fraud"
+# archetype in data/synthetic_generator.py, which moves all 5 at once).
+RISK_RELEVANT_GROUPS = set(SIGNAL_GROUPS.keys())
 
 
-def transaction_investigator(history: pd.DataFrame, flagged_day: int) -> Finding:
-    baseline, recent, has_baseline = _baseline_window(history, flagged_day)
-    if not has_baseline:
-        return Finding(
-            investigator="Transaction Investigator",
-            summary="Insufficient baseline history (<15 days) before this event to assess transaction pattern change with confidence.",
-            detail={"baseline_days_available": len(baseline)},
-            supports_risk=False,
-        )
-    base_count = baseline["txn_count"].mean() if len(baseline) else recent["txn_count"].mean()
-    recent_count = recent["txn_count"].mean()
-    pct_change = (recent_count - base_count) / base_count * 100 if base_count else 0
-
-    return Finding(
-        investigator="Transaction Investigator",
-        summary=f"Transaction volume changed {pct_change:+.0f}% vs. 60-day baseline "
-                 f"({base_count:.0f} -> {recent_count:.0f} txns/day, avg over trailing 5 days).",
-        detail={"baseline_txn_count": round(base_count, 1), "recent_txn_count": round(recent_count, 1),
-                "pct_change": round(pct_change, 1)},
-        supports_risk=bool(abs(pct_change) > 40),
-    )
+def _primary_feature(group_key: str) -> str:
+    """The single feature used for z-score/baseline lookups for a signal
+    group. txn_count is used to represent 'volume' (txn_volume moves with
+    it almost by construction - see signal_taxonomy.py)."""
+    feats = SIGNAL_GROUPS[group_key].features
+    return "txn_count" if group_key == "volume" else feats[0]
 
 
-def dispute_investigator(history: pd.DataFrame, flagged_day: int) -> Finding:
-    baseline, recent, has_baseline = _baseline_window(history, flagged_day)
-    if not has_baseline:
-        return Finding(
-            investigator="Dispute Investigator",
-            summary="Insufficient baseline history (<15 days) before this event to assess dispute pattern change with confidence.",
-            detail={"baseline_days_available": len(baseline)},
-            supports_risk=False,
-        )
-    base_rate = baseline["dispute_rate"].mean()
-    recent_rate = recent["dispute_rate"].mean()
-    ratio = (recent_rate / base_rate) if base_rate > 1e-6 else float("inf")
-
-    return Finding(
-        investigator="Dispute Investigator",
-        summary=f"Dispute rate is {ratio:.1f}x baseline ({base_rate:.3f} -> {recent_rate:.3f}), "
-                 f"averaged over the 5 days around the flagged event.",
-        detail={"baseline_dispute_rate": round(base_rate, 4), "recent_dispute_rate": round(recent_rate, 4),
-                "ratio": round(ratio, 2) if ratio != float("inf") else None},
-        supports_risk=bool(ratio > 1.8),
-    )
+def _row_at(scored_history: pd.DataFrame, day: int) -> Optional[pd.Series]:
+    match = scored_history[scored_history["day"] == day]
+    return match.iloc[0] if not match.empty else None
 
 
-def geography_investigator(history: pd.DataFrame, flagged_day: int) -> Finding:
-    baseline, recent, has_baseline = _baseline_window(history, flagged_day)
-    if not has_baseline:
-        return Finding(
-            investigator="Geography Investigator",
-            summary="Insufficient baseline history (<15 days) before this event to assess geographic shift with confidence.",
-            detail={"baseline_days_available": len(baseline)},
-            supports_risk=False,
-        )
-    base_geo = baseline["dominant_geo"].mode().iloc[0]
-    now_geo = recent["dominant_geo"].mode().iloc[0]
-    shifted = base_geo != now_geo
+def build_signal_evidence(scored_history: pd.DataFrame, flagged_day: int, group_key: str) -> list[Evidence]:
+    """Build the full evidence list (trigger/contextual/historical or
+    missing/contradicting) for ONE signal group at ONE flagged day."""
+    source = INVESTIGATOR_NAMES[group_key]
+    feat = _primary_feature(group_key)
+    trigger_row = _row_at(scored_history, flagged_day)
 
-    return Finding(
-        investigator="Geography Investigator",
-        summary=(f"Dominant transaction geography shifted from '{base_geo}' to '{now_geo}'."
-                  if shifted else f"Dominant geography unchanged ('{base_geo}')."),
-        detail={"baseline_dominant_geo": base_geo, "recent_dominant_geo": now_geo, "shifted": shifted},
-        supports_risk=bool(shifted and now_geo == "unknown_intl"),
-    )
+    if trigger_row is None:
+        return [Evidence(
+            source=source, signal_group=group_key, evidence_type="missing",
+            observation=None, baseline=None, deviation=None,
+            time_window=f"day {flagged_day}", direction="n/a", strength="n/a",
+            supports_hypothesis=None, contradicts_hypothesis=None, confidence=0.0,
+            summary=f"No data available for day {flagged_day} - cannot assess {group_key}.",
+        )]
+
+    baseline_days = trigger_row.get(f"baseline_days_{feat}", 0)
+    if pd.isna(baseline_days) or baseline_days < MIN_BASELINE_DAYS:
+        return [Evidence(
+            source=source, signal_group=group_key, evidence_type="missing",
+            observation=float(trigger_row[feat]), baseline=None, deviation=None,
+            time_window=f"trailing {BASELINE_WINDOW}d ending day {flagged_day - 1}",
+            direction="n/a", strength="n/a",
+            supports_hypothesis=None, contradicts_hypothesis=None, confidence=0.0,
+            summary=f"Insufficient baseline history ({int(baseline_days) if not pd.isna(baseline_days) else 0} "
+                     f"of {MIN_BASELINE_DAYS} minimum days) to assess {group_key} with confidence.",
+        )]
+
+    base_mean = trigger_row[f"baseline_mean_{feat}"]
+    base_std = trigger_row[f"baseline_std_{feat}"]
+    trigger_z = trigger_row[f"z_{feat}"]
+    trigger_val = trigger_row[feat]
+    trigger_deviant = abs(trigger_z) >= Z_THRESHOLD if not pd.isna(trigger_z) else False
+
+    evidence = []
+
+    # --- TRIGGER: exactly the detector's own comparison, never recomputed ---
+    if not pd.isna(trigger_z):
+        evidence.append(Evidence(
+            source=source, signal_group=group_key, evidence_type="trigger",
+            observation=round(float(trigger_val), 4), baseline=round(float(base_mean), 4),
+            deviation=round(float(trigger_z), 2),
+            time_window=f"day {flagged_day} vs. trailing {BASELINE_WINDOW}d baseline (the detector's own window)",
+            direction=direction_from_delta(trigger_val - base_mean),
+            strength=strength_from_z(abs(trigger_z)),
+            supports_hypothesis="A" if trigger_deviant else None,
+            contradicts_hypothesis="B" if trigger_deviant else None,
+            confidence=min(1.0, abs(trigger_z) / 5.0) if trigger_deviant else 0.3,
+            summary=(f"{group_key}: day-{flagged_day} value {trigger_val:.4g} vs. baseline "
+                     f"{base_mean:.4g} (z={trigger_z:+.2f}) - "
+                     f"{'a statistically significant deviation' if trigger_deviant else 'within normal range'}."),
+        ))
+
+    # --- CONTEXTUAL: 3-day and 7-day trailing windows ending on flagged_day ---
+    # Short window suits fast-moving signals (volume, dispute); medium window
+    # suits slower-moving ones (refund, category/geo mix) - see docs/EVIDENCE_MODEL.md
+    # for why each window was chosen per signal.
+    for span, label in ((3, "short-term (3-day)"), (7, "medium-term (7-day)")):
+        window = scored_history[(scored_history["day"] > flagged_day - span) & (scored_history["day"] <= flagged_day)]
+        if window.empty or pd.isna(base_std) or base_std == 0:
+            continue
+        recent_mean = window[feat].mean()
+        z_equiv = (recent_mean - base_mean) / base_std
+        deviant = abs(z_equiv) >= Z_THRESHOLD
+        evidence.append(Evidence(
+            source=source, signal_group=group_key, evidence_type="contextual",
+            observation=round(float(recent_mean), 4), baseline=round(float(base_mean), 4),
+            deviation=round(float(z_equiv), 2),
+            time_window=f"{label} trailing avg ending day {flagged_day}, vs. same detector baseline",
+            direction=direction_from_delta(recent_mean - base_mean),
+            strength=strength_from_z(abs(z_equiv)),
+            supports_hypothesis="A" if deviant else None,
+            contradicts_hypothesis="B" if deviant else None,
+            confidence=0.6,  # contextual windows are corroborating, not primary - see CONFIDENCE_MODEL.md
+            summary=(f"{group_key}: {label} average {recent_mean:.4g} vs. baseline {base_mean:.4g} "
+                     f"(z={z_equiv:+.2f}) - {'persists beyond the single trigger day' if deviant else 'trend not sustained at deviation level'}."),
+        ))
+
+    # --- HISTORICAL: has this merchant shown a deviation this large before? ---
+    prior = scored_history[scored_history["day"] < flagged_day]
+    prior_z = prior[f"z_{feat}"].dropna()
+    n_prior_extreme = int((prior_z.abs() >= Z_THRESHOLD).sum())
+    evidence.append(Evidence(
+        source=source, signal_group=group_key, evidence_type="historical",
+        observation=float(n_prior_extreme), baseline=None, deviation=None,
+        time_window=f"entire prior history (days 0-{flagged_day - 1})",
+        direction="n/a",
+        strength="strong" if n_prior_extreme == 0 else ("weak" if n_prior_extreme <= 2 else "n/a"),
+        supports_hypothesis="A" if (n_prior_extreme == 0 and trigger_deviant) else None,
+        contradicts_hypothesis="B" if (n_prior_extreme == 0 and trigger_deviant) else None,
+        confidence=0.5,
+        summary=(f"{group_key}: this merchant has shown a deviation of this magnitude "
+                 f"{n_prior_extreme} time(s) before in its prior history "
+                 f"({'never before - novel behavior' if n_prior_extreme == 0 else 'has happened before'})."),
+    ))
+
+    # --- CONTRADICTING: this group did NOT deviate ---
+    if not trigger_deviant and group_key in RISK_RELEVANT_GROUPS:
+        evidence.append(Evidence(
+            source=source, signal_group=group_key, evidence_type="contradicting",
+            observation=round(float(trigger_val), 4), baseline=round(float(base_mean), 4),
+            deviation=round(float(trigger_z), 2) if not pd.isna(trigger_z) else None,
+            time_window=f"day {flagged_day} vs. trailing {BASELINE_WINDOW}d baseline",
+            direction=direction_from_delta(trigger_val - base_mean),
+            strength="weak",
+            supports_hypothesis="B", contradicts_hypothesis="A",
+            confidence=0.4,
+            summary=f"{group_key}: no deviation at the trigger day - a coordinated risk episode "
+                     "would plausibly move this dimension too, and it didn't.",
+        ))
+
+    return evidence
 
 
-def merchant_profile_investigator(history: pd.DataFrame, flagged_day: int) -> Finding:
-    baseline, recent, has_baseline = _baseline_window(history, flagged_day)
-    if not has_baseline:
-        return Finding(
-            investigator="Merchant Profile Investigator",
-            summary="Insufficient baseline history (<15 days) before this event to assess category shift with confidence.",
-            detail={"baseline_days_available": len(baseline)},
-            supports_risk=False,
-        )
-    base_cat = baseline["dominant_category"].mode().iloc[0]
-    now_cat = recent["dominant_category"].mode().iloc[0]
-    shifted = base_cat != now_cat
-
-    return Finding(
-        investigator="Merchant Profile Investigator",
-        summary=(f"Dominant product category shifted from '{base_cat}' to '{now_cat}'."
-                  if shifted else f"Dominant category unchanged ('{base_cat}')."),
-        detail={"baseline_dominant_category": base_cat, "recent_dominant_category": now_cat, "shifted": shifted},
-        supports_risk=bool(shifted and now_cat == "digital_goods"),
-    )
-
-
-def run_all_investigators(history: pd.DataFrame, flagged_day: int) -> list[Finding]:
-    return [
-        transaction_investigator(history, flagged_day),
-        dispute_investigator(history, flagged_day),
-        geography_investigator(history, flagged_day),
-        merchant_profile_investigator(history, flagged_day),
-    ]
+def run_all_investigators(scored_history: pd.DataFrame, flagged_day: int) -> list[Evidence]:
+    """Run all 5 signal-group investigators and return one flat, ordered
+    list of structured Evidence for the flagged day."""
+    all_evidence: list[Evidence] = []
+    for group_key in SIGNAL_GROUPS:
+        all_evidence.extend(build_signal_evidence(scored_history, flagged_day, group_key))
+    return all_evidence

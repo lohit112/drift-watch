@@ -44,6 +44,9 @@ def run_for_merchant(scored: pd.DataFrame, merchant_id: str, label: str, prefer_
         # unlike eval() which was used here previously - see PHASE_1_REPORT.md.
         signal_groups = ast.literal_eval(signal_groups)
 
+    # PHASE 2: pass the DETECTOR'S OWN SCORED history (not raw), so
+    # investigators build trigger evidence from the exact numbers the
+    # detector flagged on - see PHASE_1_REPORT.md §9 / docs/EVIDENCE_MODEL.md.
     case = build_case(history, first_flag_day, signal_groups)
     print(json.dumps(case.to_dict(), indent=2, default=str))
 
